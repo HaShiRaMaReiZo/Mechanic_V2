@@ -45,7 +45,18 @@ router.post(
       const { username, password } = req.body;
 
       // Find user by username (case-insensitive)
-      const user = await User.findByUsername(username);
+      let user;
+      try {
+        user = await User.findByUsername(username);
+      } catch (dbError) {
+        if (dbError.code === 'ECONNREFUSED' || dbError.message.includes('not initialized')) {
+          return res.status(503).json({
+            success: false,
+            message: 'Database connection failed. Please make sure MySQL is running.',
+          });
+        }
+        throw dbError; // Re-throw if it's a different error
+      }
 
       if (!user) {
         return res.status(401).json({
@@ -87,6 +98,15 @@ router.post(
       });
     } catch (error) {
       console.error('Login error:', error);
+      
+      // Check if it's a database connection error
+      if (error.code === 'ECONNREFUSED' || error.message?.includes('not initialized')) {
+        return res.status(503).json({
+          success: false,
+          message: 'Database connection failed. Please make sure MySQL is running.',
+        });
+      }
+      
       res.status(500).json({
         success: false,
         message: 'Server error during login',
@@ -116,7 +136,18 @@ router.get('/verify', async (req, res) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-in-production');
 
     // Find user
-    const user = await User.findById(decoded.userId);
+    let user;
+    try {
+      user = await User.findById(decoded.userId);
+    } catch (dbError) {
+      if (dbError.code === 'ECONNREFUSED' || dbError.message?.includes('not initialized')) {
+        return res.status(503).json({
+          success: false,
+          message: 'Database connection failed. Please make sure MySQL is running.',
+        });
+      }
+      throw dbError;
+    }
 
     if (!user || !user.isActive) {
       return res.status(401).json({
@@ -154,6 +185,14 @@ router.get('/verify', async (req, res) => {
     }
 
     console.error('Token verification error:', error);
+    
+    if (error.code === 'ECONNREFUSED' || error.message?.includes('not initialized')) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database connection failed. Please make sure MySQL is running.',
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Server error during token verification',
@@ -182,7 +221,18 @@ router.get('/me', async (req, res) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-in-production');
 
     // Find user
-    const user = await User.findById(decoded.userId);
+    let user;
+    try {
+      user = await User.findById(decoded.userId);
+    } catch (dbError) {
+      if (dbError.code === 'ECONNREFUSED' || dbError.message?.includes('not initialized')) {
+        return res.status(503).json({
+          success: false,
+          message: 'Database connection failed. Please make sure MySQL is running.',
+        });
+      }
+      throw dbError;
+    }
 
     if (!user || !user.isActive) {
       return res.status(401).json({
@@ -217,6 +267,14 @@ router.get('/me', async (req, res) => {
     }
 
     console.error('Get user error:', error);
+    
+    if (error.code === 'ECONNREFUSED' || error.message?.includes('not initialized')) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database connection failed. Please make sure MySQL is running.',
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Server error',

@@ -3,6 +3,7 @@ const cors = require('cors');
 require('dotenv').config();
 
 const { initDatabase } = require('./database/init');
+const { initMainDatabase } = require('./database/main-db');
 
 const app = express();
 
@@ -11,19 +12,38 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Initialize database
+// Initialize local database (non-blocking - don't crash server)
 initDatabase()
   .then(() => {
-    console.log('✅ Database initialized');
+    console.log('✅ Local database initialized');
   })
   .catch((error) => {
-    console.error('❌ Database initialization error:', error);
-    process.exit(1);
+    console.error('❌ Local database initialization error:', error.message);
+    console.log('⚠️  Make sure MySQL is running and .env is configured correctly');
+    console.log('⚠️  Server will continue but authentication will not work');
+    console.log('💡 Start MySQL from XAMPP Control Panel if not running');
   });
+
+// Initialize main database (for contract search) - non-blocking
+setTimeout(() => {
+  initMainDatabase()
+    .then(() => {
+      console.log('✅ Main database initialized');
+    })
+    .catch((error) => {
+      console.error('⚠️  Main database initialization error:', error.message);
+      console.log('⚠️  Contract search will not work until main database is configured');
+      console.log('💡 Check SSH configuration in .env file (MAIN_SSH_HOST, MAIN_SSH_KEY_PATH, etc.)');
+      if (error.code === 'ENOENT') {
+        console.log('💡 SSH key file not found. Check MAIN_SSH_KEY_PATH in .env');
+      }
+    });
+}, 2000); // Wait 2 seconds after local DB init
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/health', require('./routes/health'));
+app.use('/api/contracts', require('./routes/contracts'));
 
 // Error handling middleware
 app.use((err, req, res, next) => {
