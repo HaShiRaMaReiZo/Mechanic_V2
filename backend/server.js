@@ -12,6 +12,10 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Serve uploaded images statically
+const path = require('path');
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // Initialize local database (non-blocking - don't crash server)
 initDatabase()
   .then(() => {
@@ -44,6 +48,7 @@ setTimeout(() => {
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/health', require('./routes/health'));
 app.use('/api/contracts', require('./routes/contracts'));
+app.use('/api/history', require('./routes/history'));
 
 // Error handling middleware
 app.use((err, req, res, next) => {

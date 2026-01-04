@@ -73,6 +73,27 @@ See **[IMPORT_GUIDE.md](./IMPORT_GUIDE.md)** for detailed instructions.
    node scripts/hash-passwords.js
    ```
 
+## Copy Assets and Maintenance Data from Main DB
+
+After setting up the database tables, you need to copy existing asset and maintenance data from the Main DB to the Standalone DB:
+
+```bash
+node scripts/copy-assets-maintenances.js
+```
+
+This script will:
+- Connect to Main DB (via SSH) and Standalone DB (localhost)
+- Copy all assets from `tbl_Asset` in Main DB to Standalone DB
+- Copy all maintenance records from `tbl_AssetMaintenance` in Main DB to Standalone DB
+- Handle duplicates (updates existing records if they already exist)
+- Show progress and summary
+
+**Important Notes:**
+- Run this script **once** after initial setup
+- The script uses `ON DUPLICATE KEY UPDATE`, so it's safe to run multiple times
+- New maintenance records created through the app will be stored in Standalone DB
+- Contract and Customer data remains in Main DB (read-only)
+
 ## API Endpoints
 
 ### Authentication

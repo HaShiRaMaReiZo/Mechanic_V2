@@ -2,12 +2,17 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { getMainDatabase } = require('../database/main-db');
 
 const router = express.Router();
 
 // Generate JWT Token
-const generateToken = (userId) => {
-  return jwt.sign({ userId }, process.env.JWT_SECRET || 'your-secret-key-change-in-production', {
+const generateToken = (userId, mainDbUserId = null) => {
+  const payload = { userId };
+  if (mainDbUserId) {
+    payload.mainDbUserId = mainDbUserId;
+  }
+  return jwt.sign(payload, process.env.JWT_SECRET || 'your-secret-key-change-in-production', {
     expiresIn: process.env.JWT_EXPIRE || '7d',
   });
 };
@@ -77,8 +82,24 @@ router.post(
       // Update last login
       await user.updateLastLogin();
 
-      // Generate token
-      const token = generateToken(user.id);
+      // Look up Main DB user ID by username
+      let mainDbUserId = null;
+      try {
+        const mainDb = getMainDatabase();
+        const [mainUsers] = await mainDb.execute(
+          'SELECT userId FROM tbl_User WHERE userName = ?',
+          [user.username]
+        );
+        if (mainUsers.length > 0) {
+          mainDbUserId = mainUsers[0].userId;
+        }
+      } catch (mainDbError) {
+        console.warn('Could not fetch Main DB user ID:', mainDbError.message);
+        // Continue without Main DB user ID - will fallback to Standalone DB user ID
+      }
+
+      // Generate token with Main DB user ID
+      const token = generateToken(user.id, mainDbUserId);
 
       // Return user data (without password)
       res.json({
@@ -93,6 +114,7 @@ router.post(
             firstName: user.firstName,
             lastName: user.lastName,
             role: user.role,
+            mainDbUserId: mainDbUserId, // Include Main DB user ID in response
           },
         },
       });

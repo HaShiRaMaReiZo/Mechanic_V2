@@ -1,8 +1,58 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { getMainDatabase } = require('../database/main-db');
+const { getDatabase } = require('../database/init');
+const upload = require('../middleware/upload');
+const path = require('path');
+const jwt = require('jsonwebtoken');
 
 const router = express.Router();
+
+// Helper function to get user ID from token
+const getUserIdFromToken = (req) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (!token) return null;
+    
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-in-production');
+    return decoded.userId;
+  } catch (error) {
+    return null;
+  }
+};
+
+// Helper function to get Main DB user ID from token (fallback to Standalone DB user ID lookup)
+const getMainDbUserIdFromToken = async (req) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (!token) return null;
+    
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-in-production');
+    
+    // If Main DB user ID is in token, use it
+    if (decoded.mainDbUserId) {
+      return decoded.mainDbUserId;
+    }
+    
+    // Fallback: Look up Main DB user ID by username from Standalone DB
+    const db = getDatabase();
+    const [users] = await db.execute('SELECT username FROM users WHERE id = ?', [decoded.userId]);
+    if (users.length > 0) {
+      const mainDb = getMainDatabase();
+      const [mainUsers] = await mainDb.execute(
+        'SELECT userId FROM tbl_User WHERE userName = ?',
+        [users[0].username]
+      );
+      if (mainUsers.length > 0) {
+        return mainUsers[0].userId;
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    return null;
+  }
+};
 
 /**
  * Add 3 months to a date string
@@ -138,113 +188,178 @@ router.get('/search', async (req, res) => {
         });
       }
 
-      const db = getMainDatabase();
+      const mainDb = getMainDatabase();
+      const localDb = getDatabase();
       const searchValue = contractNo.trim();
 
-      // Search contract with related data
-      // Support partial matching on contractNo, strippedContractNo, and accStrippedContractNo
-      // Using actual column names from database (camelCase)
-      const query = `
+      // Step 1: Search contract and customer from Main DB
+      const contractQuery = `
         SELECT 
           c.contractId,
           c.contractNo,
           c.contractDate,
           c.customerId,
           cust.customerFullName,
-          cust.phoneNo1,
-          a.assetId,
-          a.chassisNo,
-          a.engineNo,
-          a.plateNo,
-          a.assetProductName AS productName,
-          a.productColor,
-          am.maintId,
-          am.maintenanceCode,
-          am.maintDueDate,
-          am.chainSprocketChanged,
-          am.chainTightened,
-          am.engineOilRefilled,
-          am.otherMaintServices,
-          am.dateImplemented,
-          am.mileage,
-          am.actualMaintCost
+          cust.phoneNo1
         FROM tbl_Contract c
-        INNER JOIN tbl_Asset a ON a.contractId = c.contractId
         LEFT JOIN tbl_Customer cust ON cust.customerId = c.customerId
-        LEFT JOIN tbl_AssetMaintenance am ON am.assetId = a.assetId
         WHERE c.contractNo LIKE ? 
            OR c.strippedContractNo LIKE ?
            OR c.accStrippedContractNo LIKE ?
-        ORDER BY am.maintDueDate DESC, am.dateImplemented DESC
+        LIMIT 1
       `;
 
       // Use % wildcards for partial matching
       const searchPattern = `%${searchValue}%`;
-      const [results] = await db.execute(query, [searchPattern, searchPattern, searchPattern]);
+      const [contractResults] = await mainDb.execute(contractQuery, [searchPattern, searchPattern, searchPattern]);
 
-      if (results.length === 0) {
+      if (contractResults.length === 0) {
         return res.status(404).json({
           success: false,
           message: 'Contract not found',
         });
       }
 
-      // Group results by contract and asset
+      const contractRow = contractResults[0];
+      const contractId = contractRow.contractId;
+
+      // Step 2: Get assets from Standalone DB
+      const assetQuery = `
+        SELECT 
+          assetId,
+          contractId,
+          chassisNo,
+          engineNo,
+          plateNo,
+          assetProductName AS productName,
+          productColor
+        FROM tbl_Asset
+        WHERE contractId = ?
+      `;
+      const [assetResults] = await localDb.execute(assetQuery, [contractId]);
+
+      if (assetResults.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'No assets found for this contract',
+        });
+      }
+
+      // Step 3: Get maintenances from Standalone DB for all assets
+      const assetIds = assetResults.map(a => a.assetId);
+      const placeholders = assetIds.map(() => '?').join(',');
+      const maintQuery = `
+        SELECT 
+          maintId,
+          assetId,
+          maintenanceCode,
+          maintDueDate,
+          chainSprocketChanged,
+          chainTightened,
+          engineOilRefilled,
+          otherMaintServices,
+          dateImplemented,
+          mileage,
+          actualMaintCost
+        FROM tbl_AssetMaintenance
+        WHERE assetId IN (${placeholders})
+        ORDER BY maintDueDate DESC, dateImplemented DESC
+      `;
+      let [maintResults] = await localDb.execute(maintQuery, assetIds);
+
+      // If no maintenance records in Standalone DB, try to get from Main DB
+      // This handles cases where data hasn't been synced yet
+      if (maintResults.length === 0) {
+        console.log(`⚠️  No maintenance records in Standalone DB for contract ${contractNo}, checking Main DB...`);
+        const mainMaintQuery = `
+          SELECT 
+            maintId,
+            assetId,
+            maintenanceCode,
+            maintDueDate,
+            chainSprocketChanged,
+            chainTightened,
+            engineOilRefilled,
+            otherMaintServices,
+            dateImplemented,
+            mileage,
+            actualMaintCost
+          FROM tbl_AssetMaintenance
+          WHERE assetId IN (${placeholders})
+          ORDER BY maintDueDate DESC, dateImplemented DESC
+        `;
+        try {
+          [maintResults] = await mainDb.execute(mainMaintQuery, assetIds);
+          if (maintResults.length > 0) {
+            console.log(`✅ Found ${maintResults.length} maintenance record(s) in Main DB`);
+          }
+        } catch (error) {
+          console.error('Error querying Main DB for maintenance records:', error.message);
+          // Continue with empty results
+        }
+      }
+
+      // Step 4: Group results by asset
       const contractData = {
         contract: {
-          contractId: results[0].contractId,
-          contractNo: results[0].contractNo,
-          contractDate: results[0].contractDate,
-          customerId: results[0].customerId,
-          customerFullName: results[0].customerFullName || null,
-          phoneNo1: results[0].phoneNo1 || null,
+          contractId: contractRow.contractId,
+          contractNo: contractRow.contractNo,
+          contractDate: contractRow.contractDate,
+          customerId: contractRow.customerId,
+          customerFullName: contractRow.customerFullName || null,
+          phoneNo1: contractRow.phoneNo1 || null,
         },
         assets: [],
       };
 
-      // Group maintenance records by asset
       const assetMap = new Map();
       const allMaintenances = [];
 
-      results.forEach((row) => {
-        const assetId = row.assetId;
+      // Initialize asset map
+      assetResults.forEach((asset) => {
+        assetMap.set(asset.assetId, {
+          assetId: asset.assetId,
+          chassisNo: asset.chassisNo,
+          engineNo: asset.engineNo,
+          plateNo: asset.plateNo,
+          productName: asset.productName,
+          productColor: asset.productColor,
+          maintenances: [],
+        });
+      });
 
-        if (!assetMap.has(assetId)) {
-          assetMap.set(assetId, {
-            assetId: row.assetId,
-            chassisNo: row.chassisNo,
-            engineNo: row.engineNo,
-            plateNo: row.plateNo,
-            productName: row.productName,
-            productColor: row.productColor,
-            maintenances: [],
-          });
-        }
-
-        // Add maintenance record if it exists
-        if (row.maintId) {
+      // Add maintenance records to assets
+      maintResults.forEach((maint) => {
+        if (assetMap.has(maint.assetId)) {
           const maintRecord = {
-            maintId: row.maintId,
-            maintenanceCode: row.maintenanceCode,
-            maintDueDate: row.maintDueDate,
-            chainSprocketChanged: row.chainSprocketChanged,
-            chainTightened: row.chainTightened,
-            engineOilRefilled: row.engineOilRefilled,
-            otherMaintServices: row.otherMaintServices,
-            dateImplemented: row.dateImplemented,
-            mileage: row.mileage,
-            actualMaintCost: row.actualMaintCost,
+            maintId: maint.maintId,
+            maintenanceCode: maint.maintenanceCode,
+            maintDueDate: maint.maintDueDate,
+            chainSprocketChanged: maint.chainSprocketChanged,
+            chainTightened: maint.chainTightened,
+            engineOilRefilled: maint.engineOilRefilled,
+            otherMaintServices: maint.otherMaintServices,
+            dateImplemented: maint.dateImplemented,
+            mileage: maint.mileage,
+            actualMaintCost: maint.actualMaintCost,
           };
-          assetMap.get(assetId).maintenances.push(maintRecord);
+          assetMap.get(maint.assetId).maintenances.push(maintRecord);
           allMaintenances.push(maintRecord);
         }
       });
 
       contractData.assets = Array.from(assetMap.values());
 
-      // Calculate maintenance status
+      // Step 5: Calculate maintenance status
       const maintenanceStatus = calculateMaintenanceStatus(allMaintenances);
       contractData.maintenanceStatus = maintenanceStatus;
+
+      // Debug logging
+      console.log(`📊 Contract ${contractNo}: Status = ${maintenanceStatus.status}, Maintenances = ${allMaintenances.length}`);
+      if (allMaintenances.length > 0) {
+        const recent = allMaintenances[0];
+        console.log(`   Most recent: maintDueDate=${recent.maintDueDate}, dateImplemented=${recent.dateImplemented || 'null'}`);
+      }
 
       res.json({
         success: true,
@@ -267,9 +382,39 @@ router.get('/search', async (req, res) => {
 router.get('/:contractNo/maintenances', async (req, res) => {
   try {
     const { contractNo } = req.params;
-    const db = getMainDatabase();
+    const mainDb = getMainDatabase();
+    const localDb = getDatabase();
 
-    const query = `
+    // First, get contractId from Main DB
+    const contractQuery = 'SELECT contractId FROM tbl_Contract WHERE contractNo = ? LIMIT 1';
+    const [contractResults] = await mainDb.execute(contractQuery, [contractNo]);
+
+    if (contractResults.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Contract not found',
+      });
+    }
+
+    const contractId = contractResults[0].contractId;
+
+    // Get assets from Standalone DB
+    const assetQuery = 'SELECT assetId, plateNo, chassisNo FROM tbl_Asset WHERE contractId = ?';
+    const [assetResults] = await localDb.execute(assetQuery, [contractId]);
+
+    if (assetResults.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+      });
+    }
+
+    const assetIds = assetResults.map(a => a.assetId);
+    const placeholders = assetIds.map(() => '?').join(',');
+    const assetMap = new Map(assetResults.map(a => [a.assetId, a]));
+
+    // Get maintenances from Standalone DB
+    const maintQuery = `
       SELECT 
         am.maintId,
         am.maintenanceCode,
@@ -281,16 +426,19 @@ router.get('/:contractNo/maintenances', async (req, res) => {
         am.chainTightened,
         am.engineOilRefilled,
         am.otherMaintServices,
-        a.plateNo,
-        a.chassisNo
-      FROM tbl_Contract c
-      INNER JOIN tbl_Asset a ON a.contractId = c.contractId
-      INNER JOIN tbl_AssetMaintenance am ON am.assetId = a.assetId
-      WHERE c.contractNo = ?
+        am.assetId
+      FROM tbl_AssetMaintenance am
+      WHERE am.assetId IN (${placeholders})
       ORDER BY am.dateImplemented DESC, am.maintDueDate DESC
     `;
+    const [maintResults] = await localDb.execute(maintQuery, assetIds);
 
-    const [results] = await db.execute(query, [contractNo]);
+    // Combine with asset data
+    const results = maintResults.map(maint => ({
+      ...maint,
+      plateNo: assetMap.get(maint.assetId)?.plateNo || null,
+      chassisNo: assetMap.get(maint.assetId)?.chassisNo || null,
+    }));
 
     res.json({
       success: true,
@@ -301,6 +449,251 @@ router.get('/:contractNo/maintenances', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching maintenance history',
+      error: error.message,
+    });
+  }
+});
+
+// @route   POST /api/contracts/:maintId/submit-service
+// @desc    Submit maintenance service data and update maintenance record
+// @access  Private (should add auth middleware later)
+router.post('/:maintId/submit-service', upload.single('image'), async (req, res) => {
+  try {
+    const { maintId } = req.params;
+    console.log(`🔍 Submit service request for maintId: ${maintId}`);
+    const db = getDatabase(); // Use Standalone DB instead of Main DB
+
+    // Parse form data
+    const engineOil = req.body.engineOil ? JSON.parse(req.body.engineOil) : { enabled: false, amount: '' };
+    const chainSprocket = req.body.chainSprocket ? JSON.parse(req.body.chainSprocket) : { enabled: false, amount: '' };
+    const chainTightening = req.body.chainTightening ? JSON.parse(req.body.chainTightening) : { enabled: false, amount: '' };
+    const serviceFee = req.body.serviceFee ? JSON.parse(req.body.serviceFee) : { enabled: false, amount: '' };
+    const mileage = req.body.mileage;
+    const totalAmount = req.body.totalAmount;
+
+    // Validate required fields
+    if (!mileage || !totalAmount) {
+      // Clean up uploaded file if validation fails
+      if (req.file) {
+        const fs = require('fs');
+        fs.unlinkSync(req.file.path);
+      }
+      return res.status(400).json({
+        success: false,
+        message: 'Mileage and total amount are required',
+      });
+    }
+
+    // Check if maintenance record exists in Standalone DB
+    const checkQuery = 'SELECT maintId, dateImplemented FROM tbl_AssetMaintenance WHERE maintId = ?';
+    let [checkResults] = await db.execute(checkQuery, [maintId]);
+
+    // If not found in Standalone DB, check Main DB and copy if exists
+    if (checkResults.length === 0) {
+      console.log(`⚠️  Maintenance record ${maintId} not found in Standalone DB, checking Main DB...`);
+      const mainDb = getMainDatabase();
+      
+      try {
+        // Check Main DB
+        const mainCheckQuery = 'SELECT * FROM tbl_AssetMaintenance WHERE maintId = ?';
+        const [mainCheckResults] = await mainDb.execute(mainCheckQuery, [maintId]);
+        
+        if (mainCheckResults.length > 0) {
+          console.log(`✅ Found maintenance record ${maintId} in Main DB, copying to Standalone DB...`);
+          const maintRecord = mainCheckResults[0];
+          
+          // Copy maintenance record from Main DB to Standalone DB
+          const copyQuery = `
+            INSERT INTO tbl_AssetMaintenance (
+              maintId, assetId, contractId, maintDueDate, unscheduled, maintenanceCode,
+              mileage, estimatedMaintCost, actualMaintCost, skipped, dateImplemented,
+              engineOilRefilled, engineOilCost, chainTightened, chainTightenedCost,
+              chainSprocketChanged, chainSprocketChangedCost, otherMaintServices,
+              otherMaintServicesCost, commissionBeneficiary, personImplemented,
+              dtConfirmedImplemented, personConfirmedImplemented, maintLastRemark,
+              maintCurrentReport, dtSmsSent, dtCreated, personCreated, dtUpdated,
+              personUpdated, dtDeleted, personDeleted, deletedByParent
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+              assetId = VALUES(assetId),
+              contractId = VALUES(contractId),
+              maintDueDate = VALUES(maintDueDate),
+              maintenanceCode = VALUES(maintenanceCode)
+          `;
+          
+          await db.execute(copyQuery, [
+            maintRecord.maintId,
+            maintRecord.assetId,
+            maintRecord.contractId,
+            maintRecord.maintDueDate,
+            maintRecord.unscheduled || 0,
+            maintRecord.maintenanceCode,
+            maintRecord.mileage,
+            maintRecord.estimatedMaintCost,
+            maintRecord.actualMaintCost,
+            maintRecord.skipped || 0,
+            maintRecord.dateImplemented,
+            maintRecord.engineOilRefilled || 0,
+            maintRecord.engineOilCost,
+            maintRecord.chainTightened || 0,
+            maintRecord.chainTightenedCost,
+            maintRecord.chainSprocketChanged || 0,
+            maintRecord.chainSprocketChangedCost,
+            maintRecord.otherMaintServices,
+            maintRecord.otherMaintServicesCost,
+            maintRecord.commissionBeneficiary,
+            maintRecord.personImplemented,
+            maintRecord.dtConfirmedImplemented,
+            maintRecord.personConfirmedImplemented,
+            maintRecord.maintLastRemark,
+            maintRecord.maintCurrentReport,
+            maintRecord.dtSmsSent,
+            maintRecord.dtCreated,
+            maintRecord.personCreated,
+            maintRecord.dtUpdated,
+            maintRecord.personUpdated,
+            maintRecord.dtDeleted,
+            maintRecord.personDeleted,
+            maintRecord.deletedByParent || 0,
+          ]);
+          
+          console.log(`✅ Copied maintenance record ${maintId} to Standalone DB`);
+          
+          // Re-query Standalone DB
+          [checkResults] = await db.execute(checkQuery, [maintId]);
+        }
+      } catch (error) {
+        console.error('Error checking/copying from Main DB:', error.message);
+      }
+    }
+
+    // If still not found after checking both databases
+    if (checkResults.length === 0) {
+      // Clean up uploaded file if maintenance not found
+      if (req.file) {
+        const fs = require('fs');
+        fs.unlinkSync(req.file.path);
+      }
+      return res.status(404).json({
+        success: false,
+        message: 'Maintenance record not found in either database',
+      });
+    }
+
+    // Check if already implemented
+    if (checkResults[0].dateImplemented) {
+      // Clean up uploaded file if already implemented
+      if (req.file) {
+        const fs = require('fs');
+        fs.unlinkSync(req.file.path);
+      }
+      return res.status(400).json({
+        success: false,
+        message: 'This maintenance has already been implemented',
+      });
+    }
+
+    // Prepare image path
+    let imagePath = null;
+    if (req.file) {
+      // Store relative path
+      imagePath = `uploads/maintenance/${req.file.filename}`;
+    }
+
+    // Prepare other services description
+    let otherMaintServices = null;
+    let otherMaintServicesCost = null;
+    if (serviceFee.enabled && serviceFee.amount) {
+      otherMaintServices = 'Service Fee';
+      otherMaintServicesCost = parseFloat(serviceFee.amount) || null;
+    }
+
+    // Get Main DB user ID from token (for personImplemented)
+    const mainDbUserId = await getMainDbUserIdFromToken(req);
+    if (!mainDbUserId) {
+      // Clean up uploaded file if auth fails
+      if (req.file) {
+        const fs = require('fs');
+        fs.unlinkSync(req.file.path);
+      }
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required or Main DB user ID not found',
+      });
+    }
+
+    // Update maintenance record
+    const updateQuery = `
+      UPDATE tbl_AssetMaintenance
+      SET 
+        dateImplemented = NOW(),
+        engineOilRefilled = ?,
+        engineOilCost = ?,
+        chainTightened = ?,
+        chainTightenedCost = ?,
+        chainSprocketChanged = ?,
+        chainSprocketChangedCost = ?,
+        otherMaintServices = ?,
+        otherMaintServicesCost = ?,
+        mileage = ?,
+        actualMaintCost = ?,
+        maintCurrentReport = ?,
+        personImplemented = ?,
+        dtUpdated = NOW(),
+        personUpdated = ?
+      WHERE maintId = ?
+    `;
+
+    const updateValues = [
+      engineOil.enabled ? 1 : 0,
+      engineOil.enabled && engineOil.amount ? parseFloat(engineOil.amount) : null,
+      chainTightening.enabled ? 1 : 0,
+      chainTightening.enabled && chainTightening.amount ? parseFloat(chainTightening.amount) : null,
+      chainSprocket.enabled ? 1 : 0,
+      chainSprocket.enabled && chainSprocket.amount ? parseFloat(chainSprocket.amount) : null,
+      otherMaintServices,
+      otherMaintServicesCost,
+      parseFloat(mileage) || null,
+      parseFloat(totalAmount) || null,
+      imagePath,
+      mainDbUserId, // Use Main DB user ID for personImplemented
+      mainDbUserId, // Use Main DB user ID for personUpdated
+      maintId,
+    ];
+
+    await db.execute(updateQuery, updateValues);
+
+    // Get updated record
+    const [updatedResults] = await db.execute(
+      'SELECT maintId, dateImplemented, maintCurrentReport FROM tbl_AssetMaintenance WHERE maintId = ?',
+      [maintId]
+    );
+
+    res.json({
+      success: true,
+      message: 'Maintenance service submitted successfully',
+      data: {
+        maintId: parseInt(maintId),
+        dateImplemented: updatedResults[0].dateImplemented,
+        imagePath: updatedResults[0].maintCurrentReport,
+      },
+    });
+  } catch (error) {
+    console.error('Submit maintenance service error:', error);
+    
+    // Clean up uploaded file on error
+    if (req.file) {
+      const fs = require('fs');
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        console.error('Error deleting uploaded file:', unlinkError);
+      }
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error submitting maintenance service',
       error: error.message,
     });
   }
