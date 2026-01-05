@@ -51,12 +51,30 @@ const getMainDbUserIdFromToken = async (req) => {
   }
 };
 
+// Helper function to format date as YYYY-MM-DD in local time
+const formatLocalDate = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 // Helper function to get week boundaries (Monday to Sunday)
 const getWeekBoundaries = (date = new Date()) => {
+  // Create a new date and set to noon to avoid timezone issues
   const d = new Date(date);
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
-  const monday = new Date(d.setDate(diff));
+  d.setHours(12, 0, 0, 0);
+  const day = d.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+  
+  // Calculate days to subtract to get to Monday
+  // Monday (1) -> 0 days back
+  // Tuesday (2) -> 1 day back
+  // ...
+  // Sunday (0) -> 6 days back
+  const daysToMonday = day === 0 ? 6 : day - 1;
+  
+  const monday = new Date(d);
+  monday.setDate(d.getDate() - daysToMonday);
   monday.setHours(0, 0, 0, 0);
   
   const sunday = new Date(monday);
@@ -66,8 +84,8 @@ const getWeekBoundaries = (date = new Date()) => {
   return {
     weekStart: monday,
     weekEnd: sunday,
-    weekStartStr: monday.toISOString().split('T')[0],
-    weekEndStr: sunday.toISOString().split('T')[0],
+    weekStartStr: formatLocalDate(monday),
+    weekEndStr: formatLocalDate(sunday),
   };
 };
 
@@ -124,7 +142,34 @@ router.get('/weekly-summary', async (req, res) => {
       });
     }
 
+    // IMPORTANT: First, check for and remove duplicate/overlapping payment records
+    // This prevents the same service from being counted in multiple payment records
+    // Find all payment records that overlap with the current week's date range
+    const [overlappingRecords] = await db.execute(
+      `SELECT paymentId, weekStartDate, weekEndDate 
+       FROM tbl_MechanicPayment 
+       WHERE userId = ? 
+       AND (
+         (weekStartDate <= ? AND weekEndDate >= ?) OR
+         (weekStartDate <= ? AND weekEndDate >= ?) OR
+         (weekStartDate = ? OR weekEndDate = ?)
+       )`,
+      [userId, weekStartStr, weekStartStr, weekEndStr, weekEndStr, weekStartStr, weekEndStr]
+    );
+    
+    // If we find overlapping records, delete them (they have wrong week boundaries)
+    // We'll create/update the correct one below
+    if (overlappingRecords.length > 0) {
+      const duplicateIds = overlappingRecords.map(r => r.paymentId);
+      await db.execute(
+        `DELETE FROM tbl_MechanicPayment WHERE paymentId IN (${duplicateIds.map(() => '?').join(',')})`,
+        duplicateIds
+      );
+      console.log(`Deleted ${duplicateIds.length} duplicate/overlapping payment record(s) for user ${userId}, week ${weekStartStr}`);
+    }
+
     // Get or create payment record (use Standalone DB user ID for payment tracking)
+    // Check if there's a payment record for this week (after cleaning duplicates)
     let [paymentRecords] = await db.execute(
       'SELECT * FROM tbl_MechanicPayment WHERE userId = ? AND weekStartDate = ?',
       [userId, weekStartStr]
@@ -133,7 +178,7 @@ router.get('/weekly-summary', async (req, res) => {
     let paymentRecord = paymentRecords[0];
     
     if (!paymentRecord) {
-      // Create new payment record
+      // Create new payment record with correct week boundaries
       const [result] = await db.execute(
         `INSERT INTO tbl_MechanicPayment (userId, weekStartDate, weekEndDate, totalAmount, serviceCount, paymentStatus)
          VALUES (?, ?, ?, ?, ?, 'pending')`,
@@ -222,14 +267,28 @@ router.get('/payment-periods', async (req, res) => {
     const formattedPeriods = periods.map((period) => {
       const startDate = new Date(period.weekStartDate);
       const endDate = new Date(period.weekEndDate);
+      
+      // Set to noon to avoid timezone issues
+      startDate.setHours(12, 0, 0, 0);
+      endDate.setHours(12, 0, 0, 0);
+      
       const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
         'July', 'August', 'September', 'October', 'November', 'December'];
+      const monthNamesShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
       
-      const monthName = monthNames[startDate.getMonth()];
+      // Use abbreviated month name from start date
+      const monthName = monthNamesShort[startDate.getMonth()];
+      
+      // Format date range: "29 - 4" or "5 - 11" (no year, handles month boundaries)
+      const startDay = startDate.getDate();
+      const endDay = endDate.getDate();
+      const dateRange = `${startDay} - ${endDay}`;
+      
       // Compare week start dates (handle both Date objects and date strings)
       const periodWeekStart = period.weekStartDate instanceof Date 
-        ? period.weekStartDate.toISOString().split('T')[0]
-        : new Date(period.weekStartDate).toISOString().split('T')[0];
+        ? formatLocalDate(period.weekStartDate)
+        : period.weekStartDate;
       const isCurrentWeek = getWeekBoundaries().weekStartStr === periodWeekStart;
 
       return {
@@ -237,7 +296,7 @@ router.get('/payment-periods', async (req, res) => {
         weekStartDate: period.weekStartDate,
         weekEndDate: period.weekEndDate,
         monthName,
-        dateRange: `${startDate.getDate()}-${endDate.getDate()},${endDate.getFullYear()}`,
+        dateRange,
         totalAmount: parseFloat(period.totalAmount) || 0,
         serviceCount: period.serviceCount || 0,
         paymentStatus: period.paymentStatus || 'pending',
@@ -288,21 +347,124 @@ router.get('/period/:weekStartDate/services', async (req, res) => {
     const mainDb = getMainDatabase();
 
     // Get payment period to get week end date
-    const [paymentRecords] = await db.execute(
-      'SELECT weekEndDate FROM tbl_MechanicPayment WHERE userId = ? AND weekStartDate = ?',
+    // Also check for records with overlapping dates in case weekStartDate is wrong
+    let [paymentRecords] = await db.execute(
+      'SELECT paymentId, weekStartDate, weekEndDate FROM tbl_MechanicPayment WHERE userId = ? AND weekStartDate = ?',
       [userId, weekStartDate]
     );
 
+    // If not found by exact weekStartDate, try multiple strategies to find the record
     if (paymentRecords.length === 0) {
+      console.log(`Payment record not found for exact weekStartDate: ${weekStartDate}, trying overlap detection...`);
+      
+      // Strategy 1: Find by weekEndDate (if weekStartDate was wrong but weekEndDate is correct)
+      const [byEndDate] = await db.execute(
+        'SELECT paymentId, weekStartDate, weekEndDate FROM tbl_MechanicPayment WHERE userId = ? AND weekEndDate = ?',
+        [userId, weekStartDate] // Try using weekStartDate as weekEndDate (might be swapped)
+      );
+      
+      if (byEndDate.length > 0) {
+        paymentRecords = byEndDate;
+        console.log(`Found payment record by weekEndDate: ${byEndDate[0].weekStartDate} to ${byEndDate[0].weekEndDate}`);
+      } else {
+        // Strategy 2: Find by date range overlap (any date in the requested week)
+        const [overlappingRecords] = await db.execute(
+          `SELECT paymentId, weekStartDate, weekEndDate 
+           FROM tbl_MechanicPayment 
+           WHERE userId = ? 
+           AND (
+             (weekStartDate <= ? AND weekEndDate >= ?) OR
+             (weekStartDate <= ? AND weekEndDate >= ?)
+           )
+           ORDER BY weekStartDate DESC
+           LIMIT 1`,
+          [userId, weekStartDate, weekStartDate, weekStartDate, weekStartDate]
+        );
+        
+        if (overlappingRecords.length > 0) {
+          paymentRecords = overlappingRecords;
+          console.log(`Found payment record by overlap: ${overlappingRecords[0].weekStartDate} to ${overlappingRecords[0].weekEndDate}`);
+        } else {
+          // Strategy 3: Get all payment records for this user and find the closest match
+          const [allRecords] = await db.execute(
+            'SELECT paymentId, weekStartDate, weekEndDate FROM tbl_MechanicPayment WHERE userId = ? ORDER BY weekStartDate DESC',
+            [userId]
+          );
+          
+          // Find record where weekStartDate is closest to the requested date
+          const requestedDate = new Date(weekStartDate);
+          requestedDate.setHours(12, 0, 0, 0);
+          
+          let closestRecord = null;
+          let minDiff = Infinity;
+          
+          for (const record of allRecords) {
+            const recordStart = new Date(record.weekStartDate);
+            recordStart.setHours(12, 0, 0, 0);
+            const recordEnd = new Date(record.weekEndDate);
+            recordEnd.setHours(12, 0, 0, 0);
+            
+            // Check if requested date falls within this record's range
+            if (requestedDate >= recordStart && requestedDate <= recordEnd) {
+              closestRecord = record;
+              break;
+            }
+            
+            // Or find the closest by date difference
+            const diff = Math.abs(requestedDate - recordStart);
+            if (diff < minDiff) {
+              minDiff = diff;
+              closestRecord = record;
+            }
+          }
+          
+          if (closestRecord) {
+            paymentRecords = [closestRecord];
+            console.log(`Found closest payment record: ${closestRecord.weekStartDate} to ${closestRecord.weekEndDate}`);
+          }
+        }
+      }
+      
+      // If we found a record with wrong weekStartDate, fix it
+      if (paymentRecords.length > 0) {
+        const record = paymentRecords[0];
+        if (record.weekStartDate !== weekStartDate) {
+          // Recalculate correct week boundaries for the weekEndDate
+          const endDate = new Date(record.weekEndDate);
+          endDate.setHours(12, 0, 0, 0);
+          const correctWeekBounds = getWeekBoundaries(endDate);
+          
+          if (correctWeekBounds.weekStartStr !== record.weekStartDate) {
+            await db.execute(
+              `UPDATE tbl_MechanicPayment 
+               SET weekStartDate = ?, dtUpdated = NOW()
+               WHERE paymentId = ?`,
+              [correctWeekBounds.weekStartStr, record.paymentId]
+            );
+            record.weekStartDate = correctWeekBounds.weekStartStr;
+            console.log(`Fixed payment record ${record.paymentId}: updated weekStartDate to ${correctWeekBounds.weekStartStr}`);
+          }
+        }
+      }
+    }
+
+    if (paymentRecords.length === 0) {
+      console.error(`Payment period not found for userId: ${userId}, weekStartDate: ${weekStartDate}`);
       return res.status(404).json({
         success: false,
         message: 'Payment period not found',
       });
     }
 
-    const weekEndDate = paymentRecords[0].weekEndDate;
+    const paymentRecord = paymentRecords[0];
+    const weekEndDate = paymentRecord.weekEndDate;
+    const actualWeekStartDate = paymentRecord.weekStartDate;
+    
+    // Log for debugging
+    console.log(`Fetching services for period: ${actualWeekStartDate} to ${weekEndDate}, mainDbUserId: ${mainDbUserId}, requested weekStartDate: ${weekStartDate}`);
 
     // Get services for this week using Main DB user ID
+    // IMPORTANT: Services are stored in Standalone DB (tbl_AssetMaintenance), not Main DB
     const servicesQuery = `
       SELECT 
         am.maintId,
@@ -321,12 +483,17 @@ router.get('/period/:weekStartDate/services', async (req, res) => {
       INNER JOIN tbl_Asset a ON a.assetId = am.assetId
       WHERE am.personImplemented = ?
         AND am.dateImplemented IS NOT NULL
+        AND am.dtDeleted IS NULL
         AND DATE(am.dateImplemented) >= ?
         AND DATE(am.dateImplemented) <= ?
       ORDER BY am.dateImplemented DESC
     `;
 
-    const [services] = await db.execute(servicesQuery, [mainDbUserId, weekStartDate, weekEndDate]);
+    // Use Standalone DB (db) for services query - services are copied to Standalone DB
+    // Use actualWeekStartDate in case it was corrected
+    const [services] = await db.execute(servicesQuery, [mainDbUserId, actualWeekStartDate, weekEndDate]);
+    
+    console.log(`Found ${services.length} services for period ${actualWeekStartDate} to ${weekEndDate}`);
 
     // Get contract and customer info from Main DB
     const serviceDetails = await Promise.all(

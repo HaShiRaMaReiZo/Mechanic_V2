@@ -58,6 +58,9 @@ const initDatabase = async () => {
     await createAssetTable();
     await createAssetMaintenanceTable();
     
+    // Add review fields to tbl_AssetMaintenance if they don't exist
+    await addReviewFieldsToMaintenanceTable();
+    
     // Create payment table if it doesn't exist
     await createMechanicPaymentTable();
 
@@ -173,6 +176,38 @@ const createAssetMaintenanceTable = async () => {
   } catch (error) {
     console.error('❌ Error creating tbl_AssetMaintenance table:', error.message);
     throw error;
+  }
+};
+
+// Add review status fields to tbl_AssetMaintenance table
+const addReviewFieldsToMaintenanceTable = async () => {
+  try {
+    // Check if reviewStatus column exists
+    const [columns] = await pool.execute(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'tbl_AssetMaintenance' 
+      AND COLUMN_NAME = 'reviewStatus'
+    `);
+
+    if (columns.length === 0) {
+      // Add review fields if they don't exist
+      await pool.execute(`
+        ALTER TABLE tbl_AssetMaintenance
+        ADD COLUMN reviewStatus ENUM('pending', 'approved', 'rejected') DEFAULT 'pending' AFTER deletedByParent,
+        ADD COLUMN reviewedBy INT NULL AFTER reviewStatus,
+        ADD COLUMN reviewedAt DATETIME NULL AFTER reviewedBy,
+        ADD COLUMN reviewNotes TEXT NULL AFTER reviewedAt,
+        ADD INDEX idx_reviewStatus (reviewStatus)
+      `);
+      console.log('✅ Review fields added to tbl_AssetMaintenance table');
+    } else {
+      console.log('✅ Review fields already exist in tbl_AssetMaintenance table');
+    }
+  } catch (error) {
+    console.error('❌ Error adding review fields to tbl_AssetMaintenance table:', error.message);
+    // Don't throw - allow table to exist without these fields if migration fails
   }
 };
 
