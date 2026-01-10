@@ -6,28 +6,39 @@ const API_PORT = 3000;
 /**
  * Generate common IP addresses to try for server discovery
  * Tries common network ranges and specific IPs
+ * Prioritizes most likely IPs first
  */
 function generateCommonIPs(): string[] {
   const ips: string[] = [];
   
-  // Android emulator
-  ips.push('10.0.2.2');
-  
-  // iOS simulator / local dev
+  // iOS simulator / local dev (try first for simulators)
   ips.push('localhost');
   ips.push('127.0.0.1');
   
-  // Common home network ranges (192.168.x.100-150)
-  for (let subnet = 0; subnet <= 1; subnet++) {
-    for (let host = 100; host <= 150; host += 10) {
-      ips.push(`192.168.${subnet}.${host}`);
+  // Android emulator
+  ips.push('10.0.2.2');
+  
+  // PRIORITY: Known server IP (add your actual server IP here)
+  // This will be tried first after localhost
+  ips.push('172.16.3.7'); // Your current server IP
+  
+  // Common corporate/enterprise ranges (172.16.x.x) - try subnet 3 first (your network)
+  // Try subnet 3 first (most likely)
+  for (let host = 1; host <= 20; host++) {
+    ips.push(`172.16.3.${host}`);
+  }
+  // Then try other subnets
+  for (let subnet2 = 0; subnet2 <= 3; subnet2++) {
+    if (subnet2 === 3) continue; // Already tried above
+    for (let host = 1; host <= 10; host++) {
+      ips.push(`172.16.${subnet2}.${host}`);
     }
   }
   
-  // Common corporate/enterprise ranges (172.16.x.x)
-  for (let subnet2 = 0; subnet2 <= 3; subnet2++) {
-    for (let host = 100; host <= 200; host += 20) {
-      ips.push(`172.16.${subnet2}.${host}`);
+  // Common home network ranges (192.168.x.x) - try fewer IPs
+  for (let subnet = 0; subnet <= 1; subnet++) {
+    for (let host = 1; host <= 10; host++) {
+      ips.push(`192.168.${subnet}.${host}`);
     }
   }
   
@@ -39,23 +50,33 @@ function generateCommonIPs(): string[] {
  * Try to discover the server IP by attempting connections
  */
 async function discoverServerIP(): Promise<string | null> {
-  // First, try cached IP
+  // First, try cached IP (but with shorter timeout to fail fast if wrong)
   try {
     const cachedIP = await AsyncStorage.getItem(API_IP_CACHE_KEY);
     if (cachedIP) {
       const testUrl = `http://${cachedIP}:${API_PORT}/api/health/ip`;
       try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 1500); // 1.5 second timeout (fail fast)
+        
         const response = await fetch(testUrl, { 
           method: 'GET',
-          timeout: 2000, // 2 second timeout
+          signal: controller.signal,
+          headers: {
+            'Accept': 'application/json',
+          },
         } as any);
+        
+        clearTimeout(timeoutId);
+        
         if (response.ok) {
           console.log(`✅ Using cached IP: ${cachedIP}`);
           return cachedIP;
         }
       } catch (e) {
-        // Cached IP failed, continue discovery
-        console.log(`⚠️ Cached IP ${cachedIP} failed, discovering new IP...`);
+        // Cached IP failed, clear it and continue discovery
+        console.log(`⚠️ Cached IP ${cachedIP} failed, clearing cache and discovering new IP...`);
+        await AsyncStorage.removeItem(API_IP_CACHE_KEY);
       }
     }
   } catch (e) {
@@ -65,15 +86,20 @@ async function discoverServerIP(): Promise<string | null> {
   // Try common IPs
   console.log('🔍 Discovering server IP...');
   const commonIPs = generateCommonIPs();
+  console.log(`📋 Trying ${commonIPs.length} IP addresses...`);
+  
   for (const ip of commonIPs) {
     try {
       const testUrl = `http://${ip}:${API_PORT}/api/health/ip`;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000); // 2 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout (increased)
       
       const response = await fetch(testUrl, {
         method: 'GET',
         signal: controller.signal,
+        headers: {
+          'Accept': 'application/json',
+        },
       } as any);
       
       clearTimeout(timeoutId);
@@ -87,22 +113,30 @@ async function discoverServerIP(): Promise<string | null> {
           return data.ip;
         }
       }
-    } catch (error) {
-      // Try next IP
+    } catch (error: any) {
+      // Silently try next IP (don't log every failure to avoid spam)
+      if (error.name !== 'AbortError') {
+        // Only log non-timeout errors for debugging
+        // console.log(`⚠️ ${ip} failed: ${error.message}`);
+      }
       continue;
     }
   }
 
   // Fallback: try to get IP from health endpoint on common IPs
+  console.log('🔄 Trying fallback health endpoint...');
   for (const ip of commonIPs) {
     try {
       const testUrl = `http://${ip}:${API_PORT}/api/health`;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
       
       const response = await fetch(testUrl, {
         method: 'GET',
         signal: controller.signal,
+        headers: {
+          'Accept': 'application/json',
+        },
       } as any);
       
       clearTimeout(timeoutId);
@@ -110,11 +144,11 @@ async function discoverServerIP(): Promise<string | null> {
       if (response.ok) {
         // Server found, use this IP
         await AsyncStorage.setItem(API_IP_CACHE_KEY, ip);
-        console.log(`✅ Server found at IP: ${ip}`);
+        console.log(`✅ Server found at IP: ${ip} (via health endpoint)`);
         return ip;
       }
-    } catch (error) {
-      // Try next IP
+    } catch (error: any) {
+      // Silently try next IP
       continue;
     }
   }
@@ -340,11 +374,17 @@ class ApiService {
       }
 
       const baseUrl = await this.getBaseUrl();
+      const token = await this.getAuthToken();
+      
+      const headers: any = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      // Don't set Content-Type header - let FormData set it with boundary
+      
       const response = await fetch(`${baseUrl}/contracts/${maintId}/submit-service`, {
         method: 'POST',
-        headers: {
-          // Don't set Content-Type header - let FormData set it with boundary
-        },
+        headers,
         body: formData,
       });
 
@@ -375,6 +415,62 @@ class ApiService {
       return await AsyncStorage.getItem('@auth_token');
     } catch (error) {
       return null;
+    }
+  }
+
+  /**
+   * Get current user profile
+   */
+  async getCurrentUser(): Promise<{
+    success: boolean;
+    message?: string;
+    data?: {
+      user: {
+        id: number;
+        username: string;
+        email?: string;
+        firstName?: string;
+        lastName?: string;
+        phone?: string;
+        role?: string;
+      };
+    };
+  }> {
+    try {
+      const baseUrl = await this.getBaseUrl();
+      const token = await this.getAuthToken();
+      
+      if (!token) {
+        return {
+          success: false,
+          message: 'No authentication token found',
+        };
+      }
+
+      const response = await fetch(`${baseUrl}/auth/me`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        return {
+          success: false,
+          message: data.message || 'Failed to fetch user profile',
+        };
+      }
+
+      return data;
+    } catch (error: any) {
+      console.error('Get current user error:', error);
+      return {
+        success: false,
+        message: error.message || 'Network error. Please check your connection.',
+      };
     }
   }
 

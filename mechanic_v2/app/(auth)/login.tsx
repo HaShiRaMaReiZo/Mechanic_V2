@@ -11,6 +11,8 @@ import {
   Dimensions,
   Alert,
   ActivityIndicator,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import { User, Lock, Eye, EyeOff } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -80,6 +82,7 @@ const LoginScreen = () => {
   }
 
   return (
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
       
@@ -159,6 +162,7 @@ const LoginScreen = () => {
         </View>
       </SafeAreaView>
     </View>
+    </TouchableWithoutFeedback>
   );
 };
 

@@ -9,12 +9,14 @@ import {
   ActivityIndicator,
   ScrollView,
   Alert,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useAppDispatch } from '@/common/hooks/useAppDispatch';
 import { useAppSelector } from '@/common/hooks/useAppSelector';
 import { searchContract, clearSearchResults, clearError } from '@/features/contracts/contractsSlice';
+import AppBackground from '@/components/AppBackground';
 
 export default function HomeScreen() {
   const dispatch = useAppDispatch();
@@ -56,20 +58,16 @@ export default function HomeScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <AppBackground>
       <StatusBar barStyle="light-content" />
       
-      {/* Background Gradient */}
-      <LinearGradient
-        colors={['#7EC8C6', '#B8E6E4', '#E0F4F3']}
-        style={StyleSheet.absoluteFillObject}
-      />
-
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
       <View style={styles.safeArea}>
         <ScrollView 
           style={styles.scrollView}
           contentContainerStyle={styles.scrollContentCentered}
           showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
         >
           {/* Search Card */}
           <View style={styles.searchCard}>
@@ -102,15 +100,12 @@ export default function HomeScreen() {
 
         </ScrollView>
       </View>
-    </View>
+      </TouchableWithoutFeedback>
+    </AppBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#7EC8C6',
-  },
   safeArea: {
     flex: 1,
   },

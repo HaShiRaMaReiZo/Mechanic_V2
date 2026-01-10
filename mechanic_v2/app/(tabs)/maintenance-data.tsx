@@ -8,13 +8,13 @@ import {
   TouchableOpacity,
   ActivityIndicator,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { ArrowLeft } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useAppDispatch } from '@/common/hooks/useAppDispatch';
 import { useAppSelector } from '@/common/hooks/useAppSelector';
 import { clearSearchResults } from '@/features/contracts/contractsSlice';
 import { StatusBanner } from '@/common/components/StatusBanner';
+import AppBackground from '@/components/AppBackground';
 
 export default function MaintenanceDataScreen() {
   const router = useRouter();
@@ -31,9 +31,11 @@ export default function MaintenanceDataScreen() {
   // Show loading or nothing while redirecting
   if (!searchResults) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#423491" />
-      </View>
+      <AppBackground>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#423491" />
+        </View>
+      </AppBackground>
     );
   }
 
@@ -48,15 +50,9 @@ export default function MaintenanceDataScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <AppBackground>
       <StatusBar barStyle="light-content" />
       
-      {/* Background Gradient */}
-      <LinearGradient
-        colors={['#7EC8C6', '#B8E6E4', '#E0F4F3']}
-        style={StyleSheet.absoluteFillObject}
-      />
-
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={handleBack} style={styles.backButton}>
@@ -216,15 +212,11 @@ export default function MaintenanceDataScreen() {
           )}
         </View>
       </ScrollView>
-    </View>
+    </AppBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#7EC8C6',
-  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -312,7 +304,6 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#7EC8C6',
   },
 });
 

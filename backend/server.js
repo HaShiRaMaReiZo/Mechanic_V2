@@ -71,10 +71,33 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0'; // Listen on all interfaces for network access
 
+/**
+ * Get the server's IPv4 address (cross-platform)
+ */
+function getServerIP() {
+  const os = require('os');
+  const interfaces = os.networkInterfaces();
+  
+  // Try to find IPv4 address (prefer non-internal addresses)
+  for (const interfaceName in interfaces) {
+    const addresses = interfaces[interfaceName];
+    for (const address of addresses) {
+      // Skip internal (loopback) and non-IPv4 addresses
+      if (address.family === 'IPv4' && !address.internal) {
+        return address.address;
+      }
+    }
+  }
+  
+  // Fallback to localhost
+  return '127.0.0.1';
+}
+
 app.listen(PORT, HOST, () => {
+  const serverIP = getServerIP();
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`📡 API available at http://localhost:${PORT}/api`);
-  console.log(`🌐 Network access: http://${require('os').networkInterfaces().en0?.[0]?.address || 'YOUR_IP'}:${PORT}/api`);
+  console.log(`🌐 Network access: http://${serverIP}:${PORT}/api`);
   console.log(`💡 Make sure your phone and computer are on the same WiFi network!`);
 });
 

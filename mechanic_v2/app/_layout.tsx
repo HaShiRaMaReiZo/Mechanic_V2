@@ -4,6 +4,8 @@ import { StatusBar } from 'expo-status-bar';
 import { Provider } from 'react-redux';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { View, StyleSheet, Platform } from 'react-native';
+import { useFonts } from 'expo-font';
+import { BakbakOne_400Regular } from '@expo-google-fonts/bakbak-one';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -13,9 +15,38 @@ export const unstable_settings = {
   initialRouteName: '(auth)',
 };
 
+// Make navigation backgrounds transparent so AppBackground shows through
+const LightThemeWithTransparentBg = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    background: 'transparent',
+    card: 'transparent', // This is what bottom tabs use!
+  },
+} as const;
+
+const DarkThemeWithTransparentBg = {
+  ...DarkTheme,
+  colors: {
+    ...DarkTheme.colors,
+    background: 'transparent',
+    card: 'transparent', // This is what bottom tabs use!
+  },
+} as const;
+
 function AppContent() {
   const colorScheme = useColorScheme();
   const insets = useSafeAreaInsets();
+  
+  // Load Bakbak One font
+  const [fontsLoaded] = useFonts({
+    'BakbakOne': BakbakOne_400Regular,
+  });
+
+  // Don't render until fonts are loaded
+  if (!fontsLoaded) {
+    return null;
+  }
 
   return (
     <>
@@ -28,8 +59,12 @@ function AppContent() {
         ]}
       />
       <Provider store={store}>
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-          <Stack screenOptions={{ headerShown: false }}>
+    <ThemeProvider value={colorScheme === 'dark' ? DarkThemeWithTransparentBg : LightThemeWithTransparentBg}>
+          <Stack 
+            screenOptions={{ 
+              headerShown: false,
+              contentStyle: { backgroundColor: 'transparent' },
+            }}>
             <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       </Stack>
@@ -43,7 +78,9 @@ function AppContent() {
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
+      <View style={{ flex: 1, backgroundColor: 'transparent' }}>
       <AppContent />
+      </View>
     </SafeAreaProvider>
   );
 }

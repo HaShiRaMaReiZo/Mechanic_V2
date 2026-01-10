@@ -24,6 +24,12 @@ const MAPPING = {
   'checkmark.circle.fill': 'check-circle',
   'person.fill': 'person',
   'gearshape.fill': 'settings',
+  'bell': 'notifications',
+  'bell.fill': 'notifications',
+  'questionmark.circle': 'help-outline',
+  'questionmark.circle.fill': 'help',
+  'arrow.right.square': 'exit-to-app',
+  'rectangle.portrait.and.arrow.right': 'logout',
 } as IconMapping;
 
 /**

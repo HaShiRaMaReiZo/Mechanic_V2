@@ -1,57 +1,37 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
+import { View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
+import { CustomTabBar } from '@/components/CustomTabBar';
 
 export default function TabLayout() {
   return (
-    <SafeAreaView style={{ flex: 1 }} edges={['top']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: 'transparent' }} edges={['top']}>
+      <View style={{ flex: 1, backgroundColor: 'transparent' }}>
     <Tabs
         initialRouteName="home"
+          tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{
-        tabBarActiveTintColor: '#FFFFFF',
-        tabBarInactiveTintColor: 'rgba(255, 255, 255, 0.6)',
         headerShown: false,
-        tabBarButton: HapticTab,
-        tabBarStyle: {
-          borderTopLeftRadius: 20,
-          borderTopRightRadius: 20,
-          backgroundColor: '#423491',
-          borderTopWidth: 0,
-          height: 70,
-          paddingBottom: 4,
-          paddingTop: 4,
-        },
-        tabBarLabelStyle: {
-          fontSize: 14,
-          fontWeight: '600',
-          marginTop: 2,
-        },
-        tabBarIconStyle: {
-          marginTop: 4,
-        },
+            tabBarStyle: { backgroundColor: 'transparent', elevation: 0 },
       }}>
       <Tabs.Screen
         name="home"
         options={{
           title: 'Search',
-          tabBarIcon: ({ color }) => <IconSymbol size={30} name="house.fill" color={color} />,
         }}
       />
         <Tabs.Screen
           name="history"
           options={{
             title: 'History',
-            tabBarIcon: ({ color }) => <IconSymbol size={30} name="clock.fill" color={color} />,
           }}
         />
         <Tabs.Screen
           name="setting"
           options={{
             title: 'Setting',
-            tabBarIcon: ({ color }) => <IconSymbol size={30} name="gearshape.fill" color={color} />,
           }}
         />
         <Tabs.Screen
@@ -69,6 +49,7 @@ export default function TabLayout() {
           }}
         />
     </Tabs>
+      </View>
     </SafeAreaView>
   );
 }

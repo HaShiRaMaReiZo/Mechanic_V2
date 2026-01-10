@@ -39,20 +39,24 @@ export interface ServiceDetail {
 interface HistoryState {
   weeklySummary: WeeklySummary | null;
   paymentPeriods: PaymentPeriod[];
-  selectedPeriodServices: ServiceDetail[];
-  selectedPeriodDate: string | null;
+  periodServices: Record<string, ServiceDetail[]>; // Map of weekStartDate -> services array
   isLoading: boolean;
   isRefreshing: boolean;
+  loadingWeeklySummary: boolean; // Track weekly summary loading separately
+  loadingPaymentPeriods: boolean; // Track payment periods loading separately
+  loadingPeriodDate: string | null; // Track which period is currently loading
   error: string | null;
 }
 
 const initialState: HistoryState = {
   weeklySummary: null,
   paymentPeriods: [],
-  selectedPeriodServices: [],
-  selectedPeriodDate: null,
+  periodServices: {}, // Map to store services for multiple periods
   isLoading: false,
   isRefreshing: false,
+  loadingWeeklySummary: false,
+  loadingPaymentPeriods: false,
+  loadingPeriodDate: null,
   error: null,
 };
 
@@ -118,9 +122,11 @@ const historySlice = createSlice({
     clearError: (state) => {
       state.error = null;
     },
-    clearSelectedPeriod: (state) => {
-      state.selectedPeriodServices = [];
-      state.selectedPeriodDate = null;
+    clearSelectedPeriod: (state, action: PayloadAction<string>) => {
+      // Remove services for a specific period
+      if (action.payload) {
+        delete state.periodServices[action.payload];
+      }
     },
     refreshData: (state) => {
       state.isRefreshing = true;
@@ -130,50 +136,63 @@ const historySlice = createSlice({
     // Fetch Weekly Summary
     builder
       .addCase(fetchWeeklySummary.pending, (state) => {
-        state.isLoading = true;
+        state.loadingWeeklySummary = true;
+        state.isLoading = true; // Overall loading is true if any is loading
         state.error = null;
       })
       .addCase(fetchWeeklySummary.fulfilled, (state, action) => {
-        state.isLoading = false;
+        state.loadingWeeklySummary = false;
         state.weeklySummary = action.payload;
+        // Only set isLoading to false if both are done loading
+        state.isLoading = state.loadingWeeklySummary || state.loadingPaymentPeriods;
         state.error = null;
       })
       .addCase(fetchWeeklySummary.rejected, (state, action) => {
-        state.isLoading = false;
+        state.loadingWeeklySummary = false;
+        // Only set isLoading to false if both are done loading
+        state.isLoading = state.loadingWeeklySummary || state.loadingPaymentPeriods;
         state.error = action.payload as string;
       });
 
     // Fetch Payment Periods
     builder
       .addCase(fetchPaymentPeriods.pending, (state) => {
+        state.loadingPaymentPeriods = true;
         if (!state.isRefreshing) {
-          state.isLoading = true;
+          state.isLoading = true; // Overall loading is true if any is loading
         }
         state.error = null;
       })
       .addCase(fetchPaymentPeriods.fulfilled, (state, action) => {
-        state.isLoading = false;
+        state.loadingPaymentPeriods = false;
         state.isRefreshing = false;
         state.paymentPeriods = action.payload;
+        // Only set isLoading to false if both are done loading
+        state.isLoading = state.loadingWeeklySummary || state.loadingPaymentPeriods;
         state.error = null;
       })
       .addCase(fetchPaymentPeriods.rejected, (state, action) => {
-        state.isLoading = false;
+        state.loadingPaymentPeriods = false;
         state.isRefreshing = false;
+        // Only set isLoading to false if both are done loading
+        state.isLoading = state.loadingWeeklySummary || state.loadingPaymentPeriods;
         state.error = action.payload as string;
       });
 
     // Fetch Period Services
     builder
-      .addCase(fetchPeriodServices.pending, (state) => {
+      .addCase(fetchPeriodServices.pending, (state, action) => {
+        state.loadingPeriodDate = action.meta.arg; // Track which period is loading
         state.error = null;
       })
       .addCase(fetchPeriodServices.fulfilled, (state, action) => {
-        state.selectedPeriodServices = action.payload.services;
-        state.selectedPeriodDate = action.payload.weekStartDate;
+        // Store services for this period in the map
+        state.periodServices[action.payload.weekStartDate] = action.payload.services;
+        state.loadingPeriodDate = null; // Clear loading state
         state.error = null;
       })
       .addCase(fetchPeriodServices.rejected, (state, action) => {
+        state.loadingPeriodDate = null; // Clear loading state on error
         state.error = action.payload as string;
       });
   },

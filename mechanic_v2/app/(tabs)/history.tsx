@@ -16,15 +16,15 @@ import {
   fetchWeeklySummary,
   fetchPaymentPeriods,
   fetchPeriodServices,
-  clearSelectedPeriod,
   refreshData,
 } from '@/features/history/historySlice';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import AppBackground from '@/components/AppBackground';
+import { CustomLoadingIndicator } from '@/components/CustomLoadingIndicator';
 
 export default function HistoryScreen() {
   const dispatch = useAppDispatch();
-  const { weeklySummary, paymentPeriods, selectedPeriodServices, selectedPeriodDate, isLoading, isRefreshing, error } = useAppSelector((state) => state.history);
+  const { weeklySummary, paymentPeriods, periodServices, isLoading, isRefreshing, loadingPeriodDate, error } = useAppSelector((state) => state.history);
 
   const [expandedPeriods, setExpandedPeriods] = useState<Set<string>>(new Set());
 
@@ -40,10 +40,11 @@ export default function HistoryScreen() {
     dispatch(refreshData());
     dispatch(fetchWeeklySummary());
     dispatch(fetchPaymentPeriods());
-    if (selectedPeriodDate) {
-      dispatch(fetchPeriodServices(selectedPeriodDate));
-    }
-  }, [dispatch, selectedPeriodDate]);
+    // Refresh services for all expanded periods
+    expandedPeriods.forEach((weekStartDate) => {
+      dispatch(fetchPeriodServices(weekStartDate));
+    });
+  }, [dispatch, expandedPeriods]);
 
   const togglePeriod = async (weekStartDate: string) => {
     if (expandedPeriods.has(weekStartDate)) {
@@ -51,13 +52,13 @@ export default function HistoryScreen() {
       const newExpanded = new Set(expandedPeriods);
       newExpanded.delete(weekStartDate);
       setExpandedPeriods(newExpanded);
-      if (selectedPeriodDate === weekStartDate) {
-        dispatch(clearSelectedPeriod());
-      }
     } else {
-      // Expand - fetch services
+      // Expand - fetch services if not already loaded
       setExpandedPeriods(new Set([...expandedPeriods, weekStartDate]));
+      // Only fetch if we don't already have services for this period
+      if (!periodServices[weekStartDate]) {
       dispatch(fetchPeriodServices(weekStartDate));
+      }
     }
   };
 
@@ -98,10 +99,7 @@ export default function HistoryScreen() {
 
   // Get services for a specific period
   const getServicesForPeriod = (weekStartDate: string) => {
-    if (selectedPeriodDate === weekStartDate) {
-      return selectedPeriodServices;
-    }
-    return [];
+    return periodServices[weekStartDate] || [];
   };
 
   return (
@@ -118,6 +116,11 @@ export default function HistoryScreen() {
             <RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} />
           }
         >
+        {/* Initial Loading Indicator - Show when loading and we don't have both data sources yet, but not during refresh */}
+        {isLoading && !isRefreshing && (!weeklySummary || paymentPeriods.length === 0) ? (
+          <CustomLoadingIndicator size="large" color="#423491" style={styles.initialLoading} />
+        ) : (
+          <>
         {/* Current Week Summary - Transparent Card */}
         {weeklySummary && (
           <View style={styles.transparentCard}>
@@ -176,18 +179,18 @@ export default function HistoryScreen() {
 
             <View style={styles.periodSummary}>
               <View style={styles.periodSummaryItem}>
-                <Text style={styles.periodSummaryLabel}>{paymentPeriods[0]?.serviceCount || 0} Services</Text>
+                <Text style={styles.periodSummaryLabel}>{weeklySummary.serviceCount || 0} Services</Text>
               </View>
               <View style={styles.periodDivider} />
               <View style={styles.periodSummaryItem}>
                 <Text style={styles.periodSummaryAmount}>
-                  {formatAmount(paymentPeriods[0]?.totalAmount || 0)} MMK
+                  {formatAmount(weeklySummary.totalAmount || 0)} MMK
                 </Text>
               </View>
               <View style={styles.periodStatusBadge}>
-                {getStatusIcon(paymentPeriods[0]?.paymentStatus || 'pending')}
-                <Text style={[styles.periodStatusText, { color: getStatusColor(paymentPeriods[0]?.paymentStatus || 'pending') }]}>
-                  {getStatusText(paymentPeriods[0]?.paymentStatus || 'pending')}
+                {getStatusIcon(weeklySummary.paymentStatus || 'pending')}
+                <Text style={[styles.periodStatusText, { color: getStatusColor(weeklySummary.paymentStatus || 'pending') }]}>
+                  {getStatusText(weeklySummary.paymentStatus || 'pending')}
                 </Text>
               </View>
             </View>
@@ -195,13 +198,13 @@ export default function HistoryScreen() {
             {/* Expanded Services List */}
             {expandedPeriods.has(weeklySummary.weekStart) && (
               <View style={styles.servicesList}>
-                {isLoading ? (
-                  <ActivityIndicator size="small" color="#666" style={styles.loading} />
+                {loadingPeriodDate === weeklySummary.weekStart ? (
+                  <CustomLoadingIndicator size="small" color="#423491" style={styles.periodLoading} />
                 ) : getServicesForPeriod(weeklySummary.weekStart).length > 0 ? (
                   getServicesForPeriod(weeklySummary.weekStart).map((service) => (
                     <View key={service.maintId} style={styles.serviceItem}>
                       <View style={styles.serviceItemHeader}>
-                        <IconSymbol name="clock.fill" size={16} color="#666" />
+                        <IconSymbol name="clock.fill" size={16} color="#000000" />
                         <Text style={styles.serviceDate}>{service.dateFormatted}</Text>
                       </View>
                       <Text style={styles.serviceTypes}>{service.serviceTypes}</Text>
@@ -209,7 +212,7 @@ export default function HistoryScreen() {
                       <View style={styles.serviceFooter}>
                         <View style={styles.serviceFooterLeft}>
                           <Text style={styles.serviceAmount}>{formatAmount(service.amount)} MMK</Text>
-                          <IconSymbol name="person.fill" size={14} color="#666" />
+                          <IconSymbol name="person.fill" size={14} color="#5A657D" />
                           <Text style={styles.serviceCustomer}>{service.customerName}</Text>
                         </View>
                         <Text style={styles.serviceId}>{service.serviceId}</Text>
@@ -273,13 +276,13 @@ export default function HistoryScreen() {
                 {/* Expanded Services List */}
                 {expandedPeriods.has(period.weekStartDate) && (
                   <View style={styles.servicesList}>
-                    {isLoading ? (
-                      <ActivityIndicator size="small" color="#000000" style={styles.loading} />
+                    {loadingPeriodDate === period.weekStartDate ? (
+                      <CustomLoadingIndicator size="small" color="#423491" style={styles.periodLoading} />
                     ) : getServicesForPeriod(period.weekStartDate).length > 0 ? (
                       getServicesForPeriod(period.weekStartDate).map((service) => (
                         <View key={service.maintId} style={styles.serviceItem}>
                           <View style={styles.serviceItemHeader}>
-                            <IconSymbol name="clock.fill" size={16} color="#666" />
+                            <IconSymbol name="clock.fill" size={16} color="#000000" />
                             <Text style={styles.serviceDate}>{service.dateFormatted}</Text>
                           </View>
                           <Text style={styles.serviceTypes}>{service.serviceTypes}</Text>
@@ -287,7 +290,7 @@ export default function HistoryScreen() {
                           <View style={styles.serviceFooter}>
                             <View style={styles.serviceFooterLeft}>
                               <Text style={styles.serviceAmount}>{formatAmount(service.amount)} MMK</Text>
-                              <IconSymbol name="person.fill" size={14} color="#000000" />
+                              <IconSymbol name="person.fill" size={14} color="#5A657D" />
                               <Text style={styles.serviceCustomer}>{service.customerName}</Text>
                             </View>
                             <Text style={styles.serviceId}>{service.serviceId}</Text>
@@ -308,6 +311,8 @@ export default function HistoryScreen() {
           <View style={styles.errorContainer}>
             <Text style={styles.errorText}>{error}</Text>
           </View>
+            )}
+          </>
         )}
         </ScrollView>
       </View>
@@ -513,14 +518,15 @@ const styles = StyleSheet.create({
   },
   serviceDate: {
     fontSize: 14,
-    color: '#666',
+    color: '#5A657D', // Date text color per Figma design
     marginLeft: 8,
   },
   serviceTypes: {
     fontSize: 15,
     fontWeight: '500',
-    color: '#333',
+    color: '#000000', // Service types text color per Figma design
     marginBottom: 8,
+    fontFamily: 'BakbakOne', // Use Bakbak One font for service types
   },
   serviceDivider: {
     height: 1,
@@ -539,17 +545,17 @@ const styles = StyleSheet.create({
   serviceAmount: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#333',
+    color: '#5A657D', // MMK text color per Figma design
     marginRight: 12,
   },
   serviceCustomer: {
     fontSize: 13,
-    color: '#666',
+    color: '#000000', // Customer name text color per Figma design
     marginLeft: 4,
   },
   serviceId: {
     fontSize: 12,
-    color: '#999',
+    color: '#000000', // Service ID text color per Figma design
     fontWeight: '500',
   },
   previousPaymentsTitle: {
@@ -559,8 +565,14 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 12,
   },
-  loading: {
+  initialLoading: {
+    minHeight: 400,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  periodLoading: {
     padding: 20,
+    minHeight: 100,
   },
   noServices: {
     textAlign: 'center',

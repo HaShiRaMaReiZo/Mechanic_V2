@@ -7,10 +7,11 @@ import {
   TouchableOpacity,
   StatusBar,
   ScrollView,
-  Switch,
   Alert,
   Image,
   ActivityIndicator,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ArrowLeft, Camera } from 'lucide-react-native';
@@ -18,6 +19,7 @@ import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { useAppSelector } from '@/common/hooks/useAppSelector';
 import { apiService } from '@/services/api';
+import { CustomToggleSwitch } from '@/components/CustomToggleSwitch';
 
 interface ServiceState {
   enabled: boolean;
@@ -157,30 +159,33 @@ export default function ServicesScreen() {
   const isFormValid = mileage.trim() !== '' && totalAmount.trim() !== '';
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" />
-      
-      {/* Background Gradient */}
-      <LinearGradient
-        colors={['#7EC8C6', '#B8E6E4', '#E0F4F3']}
-        style={StyleSheet.absoluteFillObject}
-      />
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+      <View style={styles.container}>
+        <StatusBar barStyle="light-content" />
+        
+        {/* Background Gradient */}
+        <LinearGradient
+          colors={['#7EC8C6', '#B8E6E4', '#E0F4F3']}
+          style={StyleSheet.absoluteFillObject}
+        />
 
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={handleBack} style={styles.backButton}>
-          <ArrowLeft size={24} color="#FFFFFF" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Services</Text>
-        <View style={styles.headerSpacer} />
-      </View>
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity onPress={handleBack} style={styles.backButton}>
+            <ArrowLeft size={24} color="#FFFFFF" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Services</Text>
+          <View style={styles.headerSpacer} />
+        </View>
 
-      {/* Content */}
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
+        {/* Content */}
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
         <View style={styles.card}>
           {/* Service Options */}
           <View style={styles.serviceSection}>
@@ -188,11 +193,11 @@ export default function ServicesScreen() {
             <View style={styles.serviceItem}>
               <View style={styles.serviceHeader}>
                 <Text style={styles.serviceLabel}>Engine Oil</Text>
-                <Switch
+                <CustomToggleSwitch
                   value={engineOil.enabled}
                   onValueChange={(value) => setEngineOil({ ...engineOil, enabled: value })}
-                  trackColor={{ false: '#D3D3D3', true: '#4CAF50' }}
-                  thumbColor={engineOil.enabled ? '#FFFFFF' : '#F4F3F4'}
+                  trackColor={{ false: '#D3D3D3', true: '#10B981' }}
+                  thumbColor="#FFFFFF"
                 />
               </View>
               {engineOil.enabled && (
@@ -213,11 +218,11 @@ export default function ServicesScreen() {
             <View style={styles.serviceItem}>
               <View style={styles.serviceHeader}>
                 <Text style={styles.serviceLabel}>Chain Sprocket</Text>
-                <Switch
+                <CustomToggleSwitch
                   value={chainSprocket.enabled}
                   onValueChange={(value) => setChainSprocket({ ...chainSprocket, enabled: value })}
-                  trackColor={{ false: '#D3D3D3', true: '#4CAF50' }}
-                  thumbColor={chainSprocket.enabled ? '#FFFFFF' : '#F4F3F4'}
+                  trackColor={{ false: '#D3D3D3', true: '#10B981' }}
+                  thumbColor="#FFFFFF"
                 />
               </View>
               {chainSprocket.enabled && (
@@ -238,11 +243,11 @@ export default function ServicesScreen() {
             <View style={styles.serviceItem}>
               <View style={styles.serviceHeader}>
                 <Text style={styles.serviceLabel}>Chain Tightening</Text>
-                <Switch
+                <CustomToggleSwitch
                   value={chainTightening.enabled}
                   onValueChange={(value) => setChainTightening({ ...chainTightening, enabled: value })}
-                  trackColor={{ false: '#D3D3D3', true: '#4CAF50' }}
-                  thumbColor={chainTightening.enabled ? '#FFFFFF' : '#F4F3F4'}
+                  trackColor={{ false: '#D3D3D3', true: '#10B981' }}
+                  thumbColor="#FFFFFF"
                 />
               </View>
               {chainTightening.enabled && (
@@ -263,11 +268,11 @@ export default function ServicesScreen() {
             <View style={styles.serviceItem}>
               <View style={styles.serviceHeader}>
                 <Text style={styles.serviceLabel}>Service Fee</Text>
-                <Switch
+                <CustomToggleSwitch
                   value={serviceFee.enabled}
                   onValueChange={(value) => setServiceFee({ ...serviceFee, enabled: value })}
-                  trackColor={{ false: '#D3D3D3', true: '#4CAF50' }}
-                  thumbColor={serviceFee.enabled ? '#FFFFFF' : '#F4F3F4'}
+                  trackColor={{ false: '#D3D3D3', true: '#10B981' }}
+                  thumbColor="#FFFFFF"
                 />
               </View>
               {serviceFee.enabled && (
@@ -330,24 +335,25 @@ export default function ServicesScreen() {
               )}
             </TouchableOpacity>
           </View>
+
+          {/* Confirm Button */}
+          <View style={styles.confirmButtonContainer}>
+            <TouchableOpacity
+              style={[styles.confirmButton, (!isFormValid || isSubmitting) && styles.confirmButtonDisabled]}
+              onPress={handleConfirm}
+              disabled={!isFormValid || isSubmitting}
+            >
+              {isSubmitting ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.confirmButtonText}>Confirm</Text>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
       </ScrollView>
-
-      {/* Confirm Button */}
-      <View style={styles.footer}>
-        <TouchableOpacity
-          style={[styles.confirmButton, (!isFormValid || isSubmitting) && styles.confirmButtonDisabled]}
-          onPress={handleConfirm}
-          disabled={!isFormValid || isSubmitting}
-        >
-          {isSubmitting ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <Text style={styles.confirmButtonText}>Confirm</Text>
-          )}
-        </TouchableOpacity>
       </View>
-    </View>
+    </TouchableWithoutFeedback>
   );
 }
 
@@ -380,7 +386,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 20,
-    paddingBottom: 100,
+    paddingBottom: 40,
   },
   card: {
     backgroundColor: '#FFFFFF',
@@ -461,6 +467,10 @@ const styles = StyleSheet.create({
   imageSection: {
     marginBottom: 24,
   },
+  confirmButtonContainer: {
+    marginTop: 8,
+    marginBottom: 0,
+  },
   imageUploadBox: {
     width: '100%',
     aspectRatio: 1,
@@ -475,15 +485,6 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     borderRadius: 12,
-  },
-  footer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: 20,
-    paddingBottom: 40,
-    backgroundColor: 'transparent',
   },
   confirmButton: {
     backgroundColor: '#4CAF50',

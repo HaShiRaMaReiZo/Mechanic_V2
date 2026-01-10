@@ -4,13 +4,21 @@ import { verifyAuth } from '@/lib/auth-middleware';
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { paymentId: string } }
+  { params }: { params: Promise<{ paymentId: string }> }
 ) {
   try {
     const auth = await verifyAuth(request);
     if (auth.error) return auth.error;
 
-    const { paymentId } = params;
+    const { paymentId } = await params;
+    
+    if (!paymentId) {
+      return NextResponse.json(
+        { success: false, message: 'Payment ID is required' },
+        { status: 400 }
+      );
+    }
+    
     const body = await request.json();
     const { paymentStatus, paidDate, remarks } = body;
 
